@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, Query, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, Query
 
 from app.config import settings
 from app.data_aggregator.aggregator import VirtualsDataAggregator
@@ -21,7 +21,6 @@ from app.models import (
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
-ws_router = APIRouter()
 
 # Singleton aggregator (initialized on first request)
 _aggregator: Optional[VirtualsDataAggregator] = None
@@ -156,65 +155,3 @@ async def health_check():
     agg = _get_aggregator()
     status = await agg.health_check()
     return HealthResponse(status=status["status"])
-
-
-# ── WebSocket ───────────────────────────────────────────────────────────
-
-@ws_router.websocket("/ws/surges")
-async def surge_websocket(websocket: WebSocket):
-    """WebSocket endpoint for real-time surge alerts.
-
-    Clients subscribe and receive surge alerts as they are detected.
-    """
-    await websocket.accept()
-    try:
-        agg = _get_aggregator()
-
-        # Subscribe to a minimal polling loop for surges
-        import asyncio
-
-        while True:
-            surges = await agg.get_active_surges()
-            if surges:
-                await websocket.send_json({
-                    "type": "surge_alerts",
-                    "data": surges,
-                })
-            await asyncio.sleep(5)
-    except WebSocketDisconnect:
-        logger.info("Surge WebSocket disconnected")
-    except Exception as exc:
-        logger.error("Surge WebSocket error: %s", exc)
-        try:
-            await websocket.close()
-        except Exception:
-            pass
-
-
-@ws_router.websocket("/ws/tokens")
-async def tokens_websocket(websocket: WebSocket):
-    """WebSocket endpoint for real-time token updates.
-
-    Sends full token list updates on a configurable interval.
-    """
-    await websocket.accept()
-    try:
-        agg = _get_aggregator()
-        import asyncio
-
-        while True:
-            tokens = await agg.get_enriched_token_list()
-            await websocket.send_json({
-                "type": "token_update",
-                "count": len(tokens),
-                "data": [t.model_dump() for t in tokens[:50]],  # top 50
-            })
-            await asyncio.sleep(30)
-    except WebSocketDisconnect:
-        logger.info("Token WebSocket disconnected")
-    except Exception as exc:
-        logger.error("Token WebSocket error: %s", exc)
-        try:
-            await websocket.close()
-        except Exception:
-            pass
