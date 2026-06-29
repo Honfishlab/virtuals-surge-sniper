@@ -7,6 +7,7 @@ from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Query
 
+from app.api._shared import get_aggregator
 from app.config import settings
 from app.data_aggregator.aggregator import VirtualsDataAggregator
 from app.models import (
@@ -21,16 +22,6 @@ from app.models import (
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
-
-# Singleton aggregator (initialized on first request)
-_aggregator: Optional[VirtualsDataAggregator] = None
-
-
-def _get_aggregator() -> VirtualsDataAggregator:
-    global _aggregator
-    if _aggregator is None:
-        _aggregator = VirtualsDataAggregator()
-    return _aggregator
 
 
 # ── Token Endpoints ─────────────────────────────────────────────────────
@@ -48,7 +39,7 @@ async def get_tokens(
     sort_order: str = Query("desc", description="asc | desc"),
 ):
     """Get enriched token list with optional filters."""
-    agg = _get_aggregator()
+    agg = get_aggregator()
     try:
         tokens = await agg.get_enriched_token_list()
 
@@ -86,7 +77,7 @@ async def get_tokens(
 @router.get("/tokens/{address}", response_model=Optional[Dict[str, Any]])
 async def get_token_detail(address: str):
     """Get detailed data for a single token."""
-    agg = _get_aggregator()
+    agg = get_aggregator()
     try:
         token = await agg.get_token_detail(address)
         return token.model_dump() if token else None
@@ -98,7 +89,7 @@ async def get_token_detail(address: str):
 @router.get("/new-tokens", response_model=List[Dict[str, Any]])
 async def get_new_tokens(hours: int = Query(24, ge=1, le=168)):
     """Get tokens launched within the last N hours."""
-    agg = _get_aggregator()
+    agg = get_aggregator()
     try:
         tokens = await agg.get_new_tokens(hours=hours)
         return [t.model_dump() for t in tokens]
@@ -110,7 +101,7 @@ async def get_new_tokens(hours: int = Query(24, ge=1, le=168)):
 @router.get("/surges", response_model=List[Dict[str, Any]])
 async def get_surges():
     """Get current active surge alerts."""
-    agg = _get_aggregator()
+    agg = get_aggregator()
     try:
         return await agg.get_active_surges()
     except Exception as exc:
@@ -152,6 +143,6 @@ async def trigger_snipe(request: SnipeRequest):
 @router.get("/health", response_model=HealthResponse)
 async def health_check():
     """Health check endpoint."""
-    agg = _get_aggregator()
+    agg = get_aggregator()
     status = await agg.health_check()
     return HealthResponse(status=status["status"])

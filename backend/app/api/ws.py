@@ -8,6 +8,7 @@ from typing import Any, Dict, List
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
+from app.api._shared import get_aggregator
 from app.config import settings
 from app.data_aggregator.aggregator import VirtualsDataAggregator
 from app.processing.surge_engine import SurgeEngine
@@ -78,8 +79,7 @@ async def tokens_websocket(websocket: WebSocket):
 async def _get_current_surges() -> list[dict]:
     """Fetch current active surges."""
     try:
-        from app.api.routes import _get_aggregator
-        agg = _get_aggregator()
+        agg = get_aggregator()
         return await agg.get_active_surges()
     except Exception as exc:
         logger.error("Failed to fetch surges for WS: %s", exc)
@@ -89,8 +89,7 @@ async def _get_current_surges() -> list[dict]:
 async def _get_current_tokens() -> list[Any]:
     """Fetch current token list."""
     try:
-        from app.api.routes import _get_aggregator
-        agg = _get_aggregator()
+        agg = get_aggregator()
         return await agg.get_enriched_token_list()
     except Exception as exc:
         logger.error("Failed to fetch tokens for WS: %s", exc)
