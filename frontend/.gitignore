@@ -1,0 +1,7 @@
+postcss
+node_modules
+.next
+out
+*.local
+.env
+.venv
