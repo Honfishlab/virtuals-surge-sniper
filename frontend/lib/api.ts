@@ -86,6 +86,83 @@ async function request<T>(endpoint: string, options?: RequestInit): Promise<T> {
   return res.json();
 }
 
+// WebSocket client
+const WS_BASE = process.env.NEXT_PUBLIC_WS_URL || "ws://localhost:8000";
+
+export interface WSMessage {
+  type: "surge_alerts" | "token_update" | "ping";
+  data?: any;
+  count?: number;
+  ts?: number;
+}
+
+export type WSHandler = (msg: WSMessage) => void;
+
+class WebSocketClient {
+  private ws: WebSocket | null = null;
+  private handlers: Map<string, Set<WSHandler>> = new Map();
+  private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  private reconnectAttempts = 0;
+  private maxReconnectAttempts = 5;
+  private reconnectDelay = 1000;
+
+  connect(endpoint: string) {
+    this.ws = new WebSocket(endpoint);
+
+    this.ws.onmessage = (event) => {
+      const msg: WSMessage = JSON.parse(event.data);
+      this.handlers.get(msg.type)?.forEach((handler) => handler(msg));
+    };
+
+    this.ws.onclose = () => {
+      this.reconnect();
+    };
+
+    this.ws.onerror = (error) => {
+      console.error(`WS error: ${error}`);
+    };
+  }
+
+  subscribe(type: string, handler: WSHandler) {
+    if (!this.handlers.has(type)) {
+      this.handlers.set(type, new Set());
+    }
+    this.handlers.get(type)!.add(handler);
+  }
+
+  unsubscribe(type: string, handler?: WSHandler) {
+    if (!handler) {
+      this.handlers.delete(type);
+    } else {
+      this.handlers.get(type)?.delete(handler);
+    }
+  }
+
+  private reconnect() {
+    if (this.reconnectAttempts >= this.maxReconnectAttempts) {
+      console.error("Max reconnection attempts reached");
+      return;
+    }
+    this.reconnectAttempts++;
+    const delay = this.reconnectDelay * Math.pow(2, this.reconnectAttempts - 1);
+    console.log(`Reconnecting in ${delay}ms... (attempt ${this.reconnectAttempts})`);
+    this.reconnectTimer = setTimeout(() => {
+      this.connect(this.ws?.url || WS_BASE);
+    }, delay);
+  }
+
+  disconnect() {
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer);
+    }
+    if (this.ws) {
+      this.ws.close();
+    }
+    this.reconnectAttempts = 0;
+  }
+}
+
+// Singleton instances
 export const api = {
   getTokens: (params?: Record<string, string>) => {
     const qs = new URLSearchParams(params || {}).toString();
@@ -103,5 +180,9 @@ export const api = {
   }) => request("/snipe", { method: "POST", body: JSON.stringify(data) }),
   health: () => request("/health"),
 };
+
+// Export singleton WS clients
+export const surgeWS = new WebSocketClient();
+export const tokenWS = new WebSocketClient();
 
 export default api;

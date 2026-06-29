@@ -1,23 +1,21 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { TokenUniverseTable } from "./components/TokenUniverseTable";
 import { SurgeAlertPanel } from "./components/SurgeAlertPanel";
-import type { TokenData, SurgeAlert } from "./lib/api";
-import { api } from "./lib/api";
+import type { TokenData, SurgeAlert, WSMessage } from "./lib/api";
+import { api, surgeWS, tokenWS } from "./lib/api";
 
 export default function Dashboard() {
   const [tokens, setTokens] = useState<TokenData[]>([]);
   const [surges, setSurges] = useState<SurgeAlert[]>([]);
   const [loading, setLoading] = useState(true);
   const [selectedTab, setSelectedTab] = useState<"tokens" | "surges">("tokens");
+  const [wsStatus, setWsStatus] = useState<"disconnected" | "connected" | "error">("disconnected");
+  const [newSurgeCount, setNewSurgeCount] = useState(0);
+  const prevSurgeCountRef = useRef(0);
 
-  useEffect(() => {
-    loadData();
-    const interval = setInterval(loadData, 30000);
-    return () => clearInterval(interval);
-  }, []);
-
+  // HTTP polling (fallback)
   const loadData = async () => {
     try {
       const [tokensRes, surgesRes] = await Promise.all([
@@ -26,12 +24,39 @@ export default function Dashboard() {
       ]);
       setTokens(tokensRes);
       setSurges(surgesRes);
+      setLoading(false);
     } catch (err) {
       console.error("Failed to load data:", err);
-    } finally {
       setLoading(false);
     }
   };
+
+  useEffect(() => {
+    loadData();
+    const interval = setInterval(loadData, 30000);
+    return () => clearInterval(interval);
+  }, []);
+
+  // WebSocket: surge alerts
+  useEffect(() => {
+    const onSurgeAlert = (msg: WSMessage) => {
+      setSurges((prev) => {
+        const newSurgeCount = msg.data?.length || 0;
+        setNewSurgeCount((nc) => (nc > 0 ? nc + newSurgeCount : 0));
+        return msg.data || prev;
+      });
+    };
+
+    surgeWS.connect(`${process.env.NEXT_PUBLIC_WS_URL || "ws://localhost:8000"}/ws/surges`);
+    surgeWS.subscribe("surge_alerts", onSurgeAlert);
+    surgeWS.subscribe("ping", () => setWsStatus("connected"));
+    surgeWS.subscribe("error", () => setWsStatus("error"));
+
+    return () => {
+      surgeWS.unsubscribe("surge_alerts", onSurgeAlert);
+      surgeWS.unsubscribe("ping", () => {});
+    };
+  }, []);
 
   const surgingCount = tokens.filter((t) => t.surge.is_surging).length;
   const graduatedCount = tokens.filter((t) => t.token_type === "graduated").length;
@@ -75,6 +100,21 @@ export default function Dashboard() {
               <div className="text-lg font-semibold">{graduatedCount}</div>
               <div className="text-xs text-muted-foreground">Graduated</div>
             </div>
+            <div className="text-center">
+              <div className={`text-lg font-semibold ${
+                wsStatus === "connected" ? "text-green-400" : 
+                wsStatus === "error" ? "text-red-400" : "text-yellow-400"
+              }`}>
+                {wsStatus === "connected" ? "WS" : wsStatus === "error" ? "ERR" : "PT"}
+              </div>
+              <div className="text-xs text-muted-foreground">WebSocket</div>
+            </div>
+            {newSurgeCount > 0 && (
+              <div className="text-center animate-pulse">
+                <div className="text-lg font-semibold text-yellow-400">+{newSurgeCount}</div>
+                <div className="text-xs text-muted-foreground">New Alerts</div>
+              </div>
+            )}
           </div>
         </div>
       </header>
@@ -99,7 +139,9 @@ export default function Dashboard() {
           <div className="rounded-lg border border-border/50 bg-card p-4">
             <div className="text-xs text-muted-foreground mb-1">Status</div>
             <div className="text-xl font-bold flex items-center gap-2">
-              <span className="w-2 h-2 rounded-full bg-green-500 animate-pulse" />
+              <span className={`w-2 h-2 rounded-full ${
+                wsStatus === "connected" ? "bg-green-500" : "bg-yellow-500"
+              } animate-pulse`} />
               Live
             </div>
           </div>
