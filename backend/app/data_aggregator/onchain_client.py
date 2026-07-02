@@ -114,15 +114,19 @@ class OnChainClient:
     """Handles all on-chain reads from Base mainnet."""
 
     def __init__(self, rpc_url: str = "") -> None:
-        self.rpc_url = rpc_url or "https://mainnet.base.org"
+        from app.config import settings
+
+        self.rpc_url = rpc_url or settings.base_rpc_url
         self.w3: Web3 = Web3(Web3.HTTPProvider(self.rpc_url))
         self._factory: Optional[Any] = None
         self._bonding_v5: Optional[Any] = None
+        self._virtual_token: Optional[Any] = None
         self._initialized = False
 
-        # Configurable contract addresses (update from deployment docs)
-        self.factory_address = "0x0000000000000000000000000000000000000000"  # placeholder
-        self.bonding_v5_address = "0x0000000000000000000000000000000000000000"  # placeholder
+        # Virtuals Protocol contract addresses from config
+        self.factory_address = settings.factory_address
+        self.bonding_v5_address = settings.bonding_v5_address
+        self.virtual_token_address = settings.virtual_token_address
 
     @property
     def connected(self) -> bool:

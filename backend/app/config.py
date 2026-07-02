@@ -16,6 +16,11 @@ class Settings(BaseSettings):
     base_rpc_url: str = "https://mainnet.base.org"
     base_ws_url: str = "wss://mainnet.base.org"
 
+    # Virtuals Protocol Contracts on Base
+    factory_address: str = "0x0000000000000000000000000000000000000000"
+    bonding_v5_address: str = "0x1a540088125d00dd3990f9da45ca0859af4d3b01"
+    virtual_token_address: str = "0x0b3e328455c4059EEb9e3f84b5543F74E24e7E1b"
+
     # Dune Analytics
     dune_api_key: str = ""
 

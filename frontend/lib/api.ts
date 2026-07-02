@@ -75,7 +75,7 @@ export interface SurgeAlert {
 }
 
 // HTTP API client
-const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000/api";
+const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8080/api";
 
 async function request<T>(endpoint: string, options?: RequestInit): Promise<T> {
   const res = await fetch(`${API_BASE}${endpoint}`, {
@@ -87,7 +87,7 @@ async function request<T>(endpoint: string, options?: RequestInit): Promise<T> {
 }
 
 // WebSocket client
-const WS_BASE = process.env.NEXT_PUBLIC_WS_URL || "ws://localhost:8000";
+const WS_BASE = process.env.NEXT_PUBLIC_WS_URL || "ws://localhost:8080";
 
 export interface WSMessage {
   type: "surge_alerts" | "token_update" | "ping";

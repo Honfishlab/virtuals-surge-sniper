@@ -58,11 +58,19 @@ async def get_tokens(
                 continue
             filtered.append(t)
 
-        # Sort
+        # Sort — map sort_by to the appropriate numeric attribute
         reverse = sort_order == "desc"
-        if hasattr(filtered[0], sort_by) if filtered else False:
+        sort_key_map: Dict[str, str] = {
+            "alpha_score": "overall_score",
+            "market_cap": "market_cap",
+            "volume_24h": "volume_24h",
+            "age_days": "age_days",
+            "surge_score": "overall_surge_score",
+        }
+        sort_attr = sort_key_map.get(sort_by, "overall_score")
+        if filtered:
             filtered.sort(
-                key=lambda x: getattr(x, sort_by, 0) if hasattr(x, sort_by) else 0,
+                key=lambda x: _get_numeric(x, sort_attr),
                 reverse=reverse,
             )
 
@@ -71,7 +79,29 @@ async def get_tokens(
         return [t.model_dump() for t in result]
     except Exception as exc:
         logger.error("get_tokens error: %s", exc)
+        import traceback
+        traceback.print_exc()
         return []
+
+
+def _get_numeric(token: TokenData, attr: str) -> float:
+    """Safely extract a numeric sort value from a token."""
+    try:
+        if attr == "overall_score":
+            return token.alpha_score.overall_score
+        if attr == "overall_surge_score":
+            return token.surge.overall_surge_score
+        if hasattr(token, attr):
+            val = getattr(token, attr)
+            if isinstance(val, float):
+                return val
+        if hasattr(token.price, attr):
+            val = getattr(token.price, attr)
+            if isinstance(val, float):
+                return val
+    except Exception:
+        pass
+    return 0.0
 
 
 @router.get("/tokens/{address}", response_model=Optional[Dict[str, Any]])

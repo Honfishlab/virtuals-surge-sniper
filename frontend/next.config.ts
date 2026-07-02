@@ -4,6 +4,12 @@ const nextConfig: NextConfig = {
   reactStrictMode: true,
   output: "standalone",
   transpilePackages: ["lucide-react"],
+  async rewrites() {
+    return [
+      { source: "/api/:path*", destination: "http://localhost:8080/api/:path*" },
+      { source: "/ws/:path*", destination: "http://localhost:8080/ws/:path*" },
+    ];
+  },
 };
 
 export default nextConfig;

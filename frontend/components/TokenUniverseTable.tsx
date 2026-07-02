@@ -1,4 +1,5 @@
 import type { TokenData } from "@/lib/api";
+import { useMemo, useState } from "react";
 
 export interface TokenUniverseTableProps {
   tokens: TokenData[];
@@ -78,24 +79,27 @@ export function TokenUniverseTable({ tokens }: TokenUniverseTableProps) {
           <thead className="bg-muted/30">
             <tr>
               {[
-                { key: "name" as const, label: "Token" },
-                { key: "age_days" as const, label: "Age" },
-                { key: "bonding_progress" as const, label: "Bonding %" },
-                { key: "alpha_score" as const, label: "Alpha" },
-                { key: "surge_multiplier" as const, label: "Surge" },
-                { key: "usage" as const, label: "Jobs (24h)" },
-                { key: "bonding_value" as const, label: "Bonded VIRTUAL" },
-              ].map(({ key, label }) => (
+                { key: "name" as const, label: "Token", sortable: false },
+                { key: "age_days" as const, label: "Age", sortable: true },
+                { key: "bonding_progress" as const, label: "Bonding %", sortable: true },
+                { key: "alpha_score" as const, label: "Alpha", sortable: true },
+                { key: "surge_multiplier" as const, label: "Surge", sortable: true },
+                { key: "usage" as const, label: "Jobs (24h)", sortable: false },
+                { key: "bonding_value" as const, label: "Bonded VIRTUAL", sortable: false },
+              ].map(({ key, label, sortable }) => (
                 <th
                   key={key}
                   onClick={() => {
-                    if (sortBy === key) setSortDir((d) => (d === "asc" ? "desc" : "asc"));
+                    if (!sortable) return;
+                    if (sortBy === key) setSortDir((d: "asc" | "desc") => (d === "asc" ? "desc" : "asc"));
                     else {
-                      setSortBy(key);
+                      setSortBy(key as "alpha_score" | "surge_multiplier" | "age_days" | "bonding_progress");
                       setSortDir("desc");
                     }
                   }}
-                  className="px-4 py-3 text-left font-medium text-muted-foreground cursor-pointer hover:text-foreground transition-colors whitespace-nowrap"
+                  className={`px-4 py-3 text-left font-medium text-muted-foreground whitespace-nowrap ${
+                    sortable ? "cursor-pointer hover:text-foreground transition-colors" : ""
+                  }`}
                 >
                   {label}
                   {sortBy === key ? (sortDir === "desc" ? " \u2193" : " \u2191") : ""}
@@ -105,7 +109,7 @@ export function TokenUniverseTable({ tokens }: TokenUniverseTableProps) {
             </tr>
           </thead>
           <tbody className="divide-y divide-border/30">
-            {sorted.map((token) => (
+            {sorted.map((token: TokenData) => (
               <TokenRow key={token.address} token={token} onSnipe={() => console.log("Snipe:", token.address)} />
             ))}
             {sorted.length === 0 && (

@@ -1,10 +1,10 @@
 "use client";
 
 import { useState, useEffect, useRef } from "react";
-import { TokenUniverseTable } from "./components/TokenUniverseTable";
-import { SurgeAlertPanel } from "./components/SurgeAlertPanel";
-import type { TokenData, SurgeAlert, WSMessage } from "./lib/api";
-import { api, surgeWS, tokenWS } from "./lib/api";
+import { TokenUniverseTable } from "@/components/TokenUniverseTable";
+import { SurgeAlertPanel } from "@/components/SurgeAlertPanel";
+import type { TokenData, SurgeAlert, WSMessage } from "@/lib/api";
+import { api, surgeWS, tokenWS } from "@/lib/api";
 
 export default function Dashboard() {
   const [tokens, setTokens] = useState<TokenData[]>([]);
@@ -47,7 +47,7 @@ export default function Dashboard() {
       });
     };
 
-    surgeWS.connect(`${process.env.NEXT_PUBLIC_WS_URL || "ws://localhost:8000"}/ws/surges`);
+    surgeWS.connect(`${process.env.NEXT_PUBLIC_WS_URL || "ws://localhost:8080"}/ws/surges`);
     surgeWS.subscribe("surge_alerts", onSurgeAlert);
     surgeWS.subscribe("ping", () => setWsStatus("connected"));
     surgeWS.subscribe("error", () => setWsStatus("error"));

@@ -18,6 +18,7 @@ from app.data_aggregator.acp_client import ACPClient
 from app.data_aggregator.bonding_curve import BondingCurveState
 from app.data_aggregator.dune_client import DuneClient
 from app.data_aggregator.onchain_client import OnChainClient
+from app.data_aggregator.vp_api_client import VirtualsAPIClient
 from app.models import TokenType, TokenData, TokenListItem, AlphaScoreResult
 from app.processing.surge_engine import SurgeEngine
 
@@ -33,12 +34,14 @@ class VirtualsDataAggregator:
         acp_client: ACPClient | None = None,
         dune_client: DuneClient | None = None,
         onchain_client: OnChainClient | None = None,
+        vp_api_client: VirtualsAPIClient | None = None,
         surge_engine: SurgeEngine | None = None,
     ) -> None:
         self.cache = cache or CacheClient(settings.redis_url)
         self.acp = acp_client or ACPClient(settings.acp_auth_token)
         self.dune = dune_client or DuneClient(settings.dune_api_key)
         self.onchain = onchain_client or OnChainClient(settings.base_rpc_url)
+        self.vp_api = vp_api_client or VirtualsAPIClient()
         self.surge_engine = surge_engine or SurgeEngine()
 
         # Known tokens (address -> TokenData)
@@ -81,13 +84,41 @@ class VirtualsDataAggregator:
         if not tokens:
             logger.warning("No tokens discovered - returning empty list")
             return []
+        
+        logger.info(f"Discovered {len(tokens)} tokens, enriching...")
+        
+        # Enrich with per-token timeouts to prevent hanging
+        async def safe_enrich(token_info):
+            try:
+                return await asyncio.wait_for(
+                    self._enrich_single_token(token_info),
+                    timeout=5.0
+                )
+            except asyncio.TimeoutError:
+                logger.warning(f"Enrichment timeout for {token_info.get('name', '?')}")
+                return None
+            except Exception as e:
+                logger.error(f"Enrichment error for {token_info.get('name', '?')}: {e}")
+                return None
 
-        enrichment_tasks = [self._enrich_single_token(t) for t in tokens]
-        enriched = await asyncio.gather(*enrichment_tasks, return_exceptions=True)
+        enrichment_tasks = [safe_enrich(t) for t in tokens]
+
+        # Enrich with timeout to prevent hanging on slow on-chain calls
+        try:
+            enriched = await asyncio.wait_for(
+                asyncio.gather(*enrichment_tasks, return_exceptions=True),
+                timeout=30.0
+            )
+        except asyncio.TimeoutError:
+            logger.error("Enrichment timed out - returning what we have")
+            return []
 
         result: List[TokenData] = []
         for item in enriched:
-            if isinstance(item, Exception):
+            if item is None:
+                logger.warning("Enrichment returned None (timeout or error)")
+                continue
+            elif isinstance(item, Exception):
                 logger.error("Enrichment failed: %s", item)
             elif isinstance(item, TokenData):
                 result.append(item)
@@ -96,21 +127,23 @@ class VirtualsDataAggregator:
         if result:
             data = [t.model_dump() for t in result]
             await self.cache.set(CacheClient.token_list_key(), data, TTL_TOKEN_LIST)
+            logger.info(f"Returning {len(result)} enriched tokens")
 
         return result
 
     async def _discover_tokens(self) -> List[Dict[str, Any]]:
-        """Discover tokens from on-chain and ACP sources."""
+        """Discover tokens from on-chain, ACP, and VP API sources."""
         tasks: List = []
-
+        results: List[Any] = []
+        
         if self.onchain.connected:
             tasks.append(self._discover_from_chain())
-
+        
         if self.acp.is_configured:
             tasks.append(self._discover_from_acp())
-
-        if not tasks:
-            return await self._get_fallback_tokens()
+        
+        # VP API always available for token listings
+        tasks.append(self._discover_from_vp())
 
         results = await asyncio.gather(*tasks, return_exceptions=True)
         tokens: List[Dict[str, Any]] = []
@@ -122,7 +155,7 @@ class VirtualsDataAggregator:
                 continue
             if isinstance(result, list):
                 for t in result:
-                    addr = t.get("address", "")
+                    addr = t.get("token_address") or t.get("address", "")
                     if addr and addr not in seen:
                         seen.add(addr)
                         tokens.append(t)
@@ -157,6 +190,7 @@ class VirtualsDataAggregator:
             for agent in agents:
                 tokens.append({
                     "address": agent.get("address", agent.get("token_address", "")),
+                    "token_address": agent.get("address", agent.get("token_address", "")),
                     "name": agent.get("name", agent.get("title", "")),
                     "symbol": agent.get("symbol", ""),
                     "agent_id": agent.get("id", agent.get("agent_id", "")),
@@ -167,6 +201,42 @@ class VirtualsDataAggregator:
             return tokens
         except Exception as exc:
             logger.error("_discover_from_acp error: %s", exc)
+            return []
+
+    async def _discover_from_vp(self) -> List[Dict[str, Any]]:
+        """Discover tokens from Virtuals Protocol API (token listings)."""
+        try:
+            # Fetch SENTIENT tokens (main agent tokens with bonding curves)
+            vp_tokens = await self.vp_api.get_token_listings(token_type="SENTIENT", page_size=20)
+            if not vp_tokens:
+                logger.warning("VP API returned no SENTIENT tokens")
+                return []
+            
+            # Convert VP API format to our internal format
+            tokens = []
+            for t in vp_tokens:
+                tokens.append({
+                    "address": t.get("token_address", ""),
+                    "token_address": t.get("token_address", ""),
+                    "name": t.get("name", ""),
+                    "symbol": t.get("symbol", ""),
+                    "agent_id": str(t.get("id", "")),
+                    "total_value_locked": t.get("total_value_locked", 0),
+                    "market_cap": t.get("market_cap", 0),
+                    "holder_count": t.get("holder_count", 0),
+                    "chain": t.get("chain", ""),
+                    "twitter": t.get("twitter", ""),
+                    "telegram": t.get("telegram", ""),
+                    "image_url": t.get("image_url", ""),
+                    "description": t.get("description", ""),
+                    "age_days": 0,  # VP API doesn't provide creation date
+                    "launched_at": t.get("created_at"),
+                })
+            
+            logger.info("Discovered %d tokens from VP API", len(tokens))
+            return tokens
+        except Exception as exc:
+            logger.error("_discover_from_vp error: %s", exc)
             return []
 
     async def _get_fallback_tokens(self) -> List[Dict[str, Any]]:
@@ -240,8 +310,8 @@ class VirtualsDataAggregator:
 
     async def _enrich_single_token(self, token_info: Dict[str, Any]) -> TokenData:
         """Enrich a single token with all metrics."""
-        address = token_info.get("address", "")
-
+        address = token_info.get("address", "") or token_info.get("token_address", "")
+        
         token = TokenData(
             address=address,
             name=token_info.get("name", "Unknown"),
@@ -254,8 +324,11 @@ class VirtualsDataAggregator:
 
         # Parallel enrichment tasks
         tasks: Dict[str, Any] = {}
+        
+        # Only do on-chain enrichment for valid addresses (skip placeholder/zero)
+        is_valid_address = address and len(address) == 42 and address != "0x" * 40
 
-        if address and self.onchain.connected:
+        if is_valid_address and self.onchain.connected:
             tasks["curve"] = asyncio.create_task(self._get_bonding_data(address))
             tasks["price"] = asyncio.create_task(self._get_price_data(address))
 
@@ -279,7 +352,13 @@ class VirtualsDataAggregator:
                     continue
 
                 if key == "curve" and isinstance(result, dict):
-                    token.bonding = BondingCurveState.from_onchain(result)
+                    curve = BondingCurveState.from_onchain(result)
+                    token.bonding.current_supply = curve.current_supply
+                    token.bonding.total_supply = curve.total_supply
+                    token.bonding.progress_percent = curve.progress_percent
+                    token.bonding.bonding_value_virtual = curve.bonding_value_virtual()
+                    token.bonding.is_on_curve = not bool(result.get("is_graduated", False))
+                    token.bonding.is_graduated = bool(result.get("is_graduated", False))
                     token.token_type = TokenType.GRADUATED if result.get("is_graduated") else TokenType.ON_CURVE
 
                 elif key == "price" and isinstance(result, dict):
