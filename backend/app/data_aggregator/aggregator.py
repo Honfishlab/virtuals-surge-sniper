@@ -80,10 +80,26 @@ class VirtualsDataAggregator:
             logger.debug("Token list served from cache")
             return [TokenData(**t) if isinstance(t, dict) else t for t in cached]
 
-        tokens = await self._discover_tokens()
+        # Discover with timeout — never block the API
+        try:
+            tokens = await asyncio.wait_for(self._discover_tokens(), timeout=5.0)
+        except asyncio.TimeoutError:
+            logger.error("Token discovery timed out — using seed data")
+            tokens = []
+        except Exception as exc:
+            logger.error("Token discovery failed — %s — using seed data", exc)
+            tokens = []
+
         if not tokens:
-            logger.warning("No tokens discovered - returning empty list")
-            return []
+            logger.warning("No tokens discovered — falling back to seed data")
+            try:
+                from app.data_aggregator.seed_data import get_seed_tokens
+                seed_tokens = await get_seed_tokens()
+                logger.info("Returning %d seed tokens", len(seed_tokens))
+                return seed_tokens
+            except Exception as e:
+                logger.error("Seed data generation failed: %s", e)
+                return []
         
         logger.info(f"Discovered {len(tokens)} tokens, enriching...")
         
@@ -207,7 +223,10 @@ class VirtualsDataAggregator:
         """Discover tokens from Virtuals Protocol API (token listings)."""
         try:
             # Fetch SENTIENT tokens (main agent tokens with bonding curves)
-            vp_tokens = await self.vp_api.get_token_listings(token_type="SENTIENT", page_size=20)
+            vp_tokens = await asyncio.wait_for(
+                self.vp_api.get_token_listings(token_type="SENTIENT", page_size=20),
+                timeout=5.0,
+            )
             if not vp_tokens:
                 logger.warning("VP API returned no SENTIENT tokens")
                 return []
