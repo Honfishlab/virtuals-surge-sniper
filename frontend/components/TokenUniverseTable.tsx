@@ -137,7 +137,14 @@ function TokenRow({
   return (
     <tr className="hover:bg-muted/20 transition-colors">
       <td className="px-4 py-3">
-        <div className="font-medium">{token.name}</div>
+        <a
+          href={`https://dexscreener.com/base/${token.address}`}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="font-medium text-primary hover:underline cursor-pointer"
+        >
+          {token.name}
+        </a>
         <div className="text-xs text-muted-foreground">{token.symbol} · {token.address.slice(0, 8)}...</div>
       </td>
       <td className="px-4 py-3 text-muted-foreground">
