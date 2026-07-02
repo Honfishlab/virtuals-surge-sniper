@@ -80,70 +80,68 @@ class VirtualsDataAggregator:
             logger.debug("Token list served from cache")
             return [TokenData(**t) if isinstance(t, dict) else t for t in cached]
 
-        # Discover with timeout — never block the API
+        # Always load seed data as the baseline token pool
+        from app.data_aggregator.seed_data import get_seed_tokens
+        seed_tokens: list[TokenData] = []
+        try:
+            seed_tokens = await get_seed_tokens()
+            logger.info("Loaded %d seed tokens as baseline", len(seed_tokens))
+        except Exception as e:
+            logger.error("Seed data generation failed: %s", e)
+        
+        # Discover additional tokens from external sources — never block the API
+        discovered: List[TokenData] = []
         try:
             tokens = await asyncio.wait_for(self._discover_tokens(), timeout=5.0)
+            if tokens:
+                logger.info(f"Discovered {len(tokens)} tokens, enriching...")
+                
+                # Enrich with per-token timeouts to prevent hanging
+                async def safe_enrich(token_info):
+                    try:
+                        return await asyncio.wait_for(
+                            self._enrich_single_token(token_info),
+                            timeout=5.0
+                        )
+                    except asyncio.TimeoutError:
+                        logger.warning(f"Enrichment timeout for {token_info.get('name', '?')}")
+                        return None
+                    except Exception as e:
+                        logger.error(f"Enrichment error for {token_info.get('name', '?')}: {e}")
+                        return None
+                
+                enrichment_tasks = [safe_enrich(t) for t in tokens]
+                
+                try:
+                    enriched = await asyncio.wait_for(
+                        asyncio.gather(*enrichment_tasks, return_exceptions=True),
+                        timeout=30.0
+                    )
+                    for item in enriched:
+                        if isinstance(item, TokenData) and item.address:
+                            discovered.append(item)
+                except asyncio.TimeoutError:
+                    logger.error("Enrichment timed out - using what we have")
         except asyncio.TimeoutError:
-            logger.error("Token discovery timed out — using seed data")
-            tokens = []
+            logger.error("Token discovery timed out — using seed data only")
         except Exception as exc:
-            logger.error("Token discovery failed — %s — using seed data", exc)
-            tokens = []
+            logger.error("Token discovery failed — %s — using seed data only", exc)
 
-        if not tokens:
-            logger.warning("No tokens discovered — falling back to seed data")
-            try:
-                from app.data_aggregator.seed_data import get_seed_tokens
-                seed_tokens = await get_seed_tokens()
-                logger.info("Returning %d seed tokens", len(seed_tokens))
-                return seed_tokens
-            except Exception as e:
-                logger.error("Seed data generation failed: %s", e)
-                return []
-        
-        logger.info(f"Discovered {len(tokens)} tokens, enriching...")
-        
-        # Enrich with per-token timeouts to prevent hanging
-        async def safe_enrich(token_info):
-            try:
-                return await asyncio.wait_for(
-                    self._enrich_single_token(token_info),
-                    timeout=5.0
-                )
-            except asyncio.TimeoutError:
-                logger.warning(f"Enrichment timeout for {token_info.get('name', '?')}")
-                return None
-            except Exception as e:
-                logger.error(f"Enrichment error for {token_info.get('name', '?')}: {e}")
-                return None
-
-        enrichment_tasks = [safe_enrich(t) for t in tokens]
-
-        # Enrich with timeout to prevent hanging on slow on-chain calls
-        try:
-            enriched = await asyncio.wait_for(
-                asyncio.gather(*enrichment_tasks, return_exceptions=True),
-                timeout=30.0
-            )
-        except asyncio.TimeoutError:
-            logger.error("Enrichment timed out - returning what we have")
-            return []
-
+        # Merge: discovered tokens override seed tokens for the same address
         result: List[TokenData] = []
-        for item in enriched:
-            if item is None:
-                logger.warning("Enrichment returned None (timeout or error)")
-                continue
-            elif isinstance(item, Exception):
-                logger.error("Enrichment failed: %s", item)
-            elif isinstance(item, TokenData):
-                result.append(item)
-                self._tokens[item.address] = item
-
+        seen: set = set()
+        for t in discovered:
+            result.append(t)
+            seen.add(t.address)
+        for t in seed_tokens:
+            if t.address not in seen:
+                result.append(t)
+        
+        # Cache and return the combined result
         if result:
             data = [t.model_dump() for t in result]
             await self.cache.set(CacheClient.token_list_key(), data, TTL_TOKEN_LIST)
-            logger.info(f"Returning {len(result)} enriched tokens")
+            logger.info("Returning %d tokens (%d discovered + %d seed)", len(result), len(discovered), len(seed_tokens))
 
         return result
 
